@@ -28,13 +28,14 @@ pub const NumpyType = enum {
     float32_LE,
     float64_LE,
 
-    pub fn parse(str: []u8) ?NumpyType {
+    pub fn parse(str: []const u8) ?NumpyType {
         // TODO: Proper/Faster parsing
-        return switch (true) {
-            std.mem.eql(str, "<f4") => .float32_LE,
-            std.mem.eql(str, "<f8") => .float64_LE,
-            else => null,
-        };
+        if (std.mem.eql(u8, str, "<f4")) {
+            return .float32_LE;
+        } else if (std.mem.eql(u8, str, "<f8")) {
+            return .float64_LE;
+        }
+        return null;
     }
 
     pub fn dtype(self: NumpyType) type {
@@ -53,9 +54,7 @@ pub const NumpyHeader = struct {
     // TODO: Parse or match descr_type
     // https://numpy.org/devdocs/reference/arrays.dtypes.html
     // https://numpy.org/devdocs/reference/arrays.interface.html#arrays-interface
-    descr_buf: [32]u8,
-
-    descr: []const u8,
+    dtype: NumpyType,
     fortran_order: bool,
     shape: [MAX_DIM:0]u32,
 
@@ -79,9 +78,8 @@ pub const NumpyHeader = struct {
         var headerMap = try parser.parseDict(headerString[0..header.header_length], allocator);
         defer headerMap.deinit();
 
-        const descr = headerMap.get("descr").?.string;
-        std.mem.copy(u8, &header.descr_buf, descr);
-        header.descr = header.descr_buf[0..descr.len];
+        // TODO: More descriptive errors
+        header.dtype = NumpyType.parse(headerMap.get("descr").?.string).?;
         header.fortran_order = headerMap.get("fortran_order").?.boolean;
         header.shape = headerMap.get("shape").?.tuple;
 
@@ -104,8 +102,8 @@ test "read header successfully" {
 
     var reader = file.reader();
     const header = try NumpyHeader.read(reader, allocator);
-    try testing.expectEqual(.{99} ++ .{0} ** 7, header.shape);
-    try testing.expectEqualStrings("<f8", header.descr);
+    try testing.expectEqual([_:0]u32{ 99, 0, 0, 0, 0, 0, 0, 0 }, header.shape);
+    try testing.expectEqual(NumpyType.float64_LE, header.dtype);
     try testing.expectEqual(false, header.fortran_order);
 }
 
