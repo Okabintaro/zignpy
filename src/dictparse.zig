@@ -3,7 +3,7 @@ const mem = std.mem;
 
 const MAX_DIM = 8;
 
-const Parser = struct {
+pub const Parser = struct {
     pub const ParserState = enum {
         Start,
         ExpectKey,
@@ -259,7 +259,8 @@ const Parser = struct {
                     switch (ch) {
                         '\'' => {
                             p.state = .ExpectKey;
-                            try map.put(p.key.?, Value{ .string = input[p.start..i] });
+                            const val = Value{ .string = input[p.start..i] };
+                            try map.put(p.key.?, val);
                         },
                         else => {},
                     }
