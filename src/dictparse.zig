@@ -3,6 +3,7 @@ const mem = std.mem;
 
 const MAX_DIM = 8;
 
+/// Simple and limtied parser for the python dict syntax used in saving the header in npy files
 pub const Parser = struct {
     pub const ParserState = enum {
         Start,
