@@ -9,20 +9,43 @@ const InvalidHeader = error{
     NoMagic,
 };
 
+const NpyError = error{
+    NonMatchingType,
+};
+
 // The numpy format is documented here:
 // https://numpy.org/devdocs/reference/generated/numpy.lib.format.html
 
 const NPY_MAGIC = "\x93NUMPY";
 const MAX_DIM = 8;
 
-pub fn Tensor(comptime dtype: type) type {
+pub fn Tensor(comptime T: type) type {
     return struct {
-        shape: [MAX_DIM]u32,
-        data: []dtype,
+        const Self = @This();
+        const dtype = NumpyType.from_type(T);
+
+        data: []T = undefined,
+        shape: [MAX_DIM]u32 = .{0} ** MAX_DIM,
+        allocator: mem.Allocator = undefined,
+
+        pub fn readNpy(reader: anytype, allocator: mem.Allocator) anyerror!Self {
+            var header = try NumpyHeader.read(reader, allocator);
+            if (header.dtype != dtype) {
+                return NpyError.NonMatchingType;
+            }
+            var self = Self{};
+            self.allocator = allocator;
+            const len = header.shape[0]; // TODO: Sum this up
+            self.data = try allocator.alloc(T, len);
+            try reader.readNoEof(mem.sliceAsBytes(self.data));
+            return self;
+        }
+
+        pub fn deinit(self: Self) void {
+            self.allocator.free(self.data);
+        }
     };
 }
-
-const TensorF64 = Tensor(f64);
 
 pub const NumpyType = enum {
     float32_LE,
@@ -42,6 +65,14 @@ pub const NumpyType = enum {
         return switch (self) {
             .float64_LE => f64,
             .float32_LE => f32,
+        };
+    }
+
+    pub fn from_type(comptime T: type) NumpyType {
+        return switch (T) {
+            f64 => .float64_LE,
+            f32 => .float32_LE,
+            else => @compileError("The given type is not supported yet"),
         };
     }
 };
@@ -87,16 +118,8 @@ pub const NumpyHeader = struct {
     }
 };
 
-fn readData(reader: anytype, header: NumpyHeader, allocator: mem.Allocator) anyerror!TensorF64 {
-    const len = @intCast(usize, header.shape[0]);
-    var buffer = try allocator.lloc(f64, len);
-    var tensor = TensorF64{ .data = buffer, .shape = header.shape };
-    try reader.readNoEof(mem.sliceAsBytes(tensor.data));
-    return tensor;
-}
-
 test "read header successfully" {
-    var file = try std.fs.cwd().openFile("test/simple.npy", .{});
+    var file = try std.fs.cwd().openFile("test/simple_f64.npy", .{});
     defer file.close();
     const allocator = std.testing.allocator;
 
@@ -107,7 +130,28 @@ test "read header successfully" {
     try testing.expectEqual(false, header.fortran_order);
 }
 
-test "read tensor" {
-    // var tensor = Tensor(f64).read_npy("test/simple.npy");
+fn test_arange(comptime T: type, filename: []const u8) anyerror!void {
+    var file = try std.fs.cwd().openFile(filename, .{});
+    defer file.close();
+    var reader = file.reader();
 
+    const allocator = std.testing.allocator;
+    var tensor = try Tensor(T).readNpy(reader, allocator);
+    defer tensor.deinit();
+
+    for (tensor.data) |elem, i| {
+        const testVal = @intToFloat(T, i + 1);
+        try testing.expectEqual(testVal, elem);
+    }
+}
+
+test "read simple 1-d npy file" {
+    try test_arange(f64, "test/simple_f64.npy");
+    try test_arange(f32, "test/simple_f32.npy");
+    try test_arange(f32, "test/bigger_f32.npy");
+}
+
+test "read wrongly typed simple 1-d npy file" {
+    try testing.expectError(NpyError.NonMatchingType, test_arange(f64, "test/simple_f32.npy"));
+    try testing.expectError(NpyError.NonMatchingType, test_arange(f32, "test/simple_f64.npy"));
 }
