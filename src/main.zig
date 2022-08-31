@@ -2,15 +2,15 @@ const std = @import("std");
 const mem = std.mem;
 const print = std.debug.print;
 const testing = std.testing;
+const sa = @import("zig-strided-array");
 
 const dictparser = @import("dictparse.zig");
 
-const InvalidHeader = error{
-    NoMagic,
-};
-
 const NpyError = error{
+    InvalidMagic,
     NonMatchingType,
+    NonMatchingDims,
+    UnsupportedFortranOrder,
 };
 
 // The numpy format is documented here:
@@ -19,14 +19,15 @@ const NpyError = error{
 const NPY_MAGIC = "\x93NUMPY";
 const MAX_DIM = 8;
 
-pub fn Tensor(comptime T: type) type {
+pub fn Tensor(comptime T: type, comptime num_dims: usize) type {
     return struct {
         const Self = @This();
         const dtype = NumpyType.from_type(T);
 
         data: []T = undefined,
-        shape: [MAX_DIM]u32 = .{0} ** MAX_DIM,
+        shape: [num_dims]u32 = .{0} ** num_dims,
         allocator: mem.Allocator = undefined,
+        view: sa.StridedArrayView(T, num_dims) = undefined,
 
         pub fn readNpy(reader: anytype, allocator: mem.Allocator) anyerror!Self {
             var header = try NumpyHeader.read(reader, allocator);
@@ -35,13 +36,19 @@ pub fn Tensor(comptime T: type) type {
             }
             var self = Self{};
             self.allocator = allocator;
-            var n_elem = self.shape[0];
-            var i: usize = 1;
-            while (self.shape[i] != 0) : (i += 1) {
-                n_elem *= self.shape[i];
+
+            std.mem.copy(u32, self.shape[0..num_dims], header.shape[0..num_dims]);
+            // std.debug.print("\ndim[{}] = {}\n", .{ 0, self.shape[0] });
+
+            var size: usize = 1;
+            comptime var i = 0;
+            inline while (i < num_dims) : (i += 1) {
+                size *= self.shape[i];
             }
-            self.data = try allocator.alloc(T, n_elem);
+            self.data = try allocator.alloc(T, size);
             try reader.readNoEof(mem.sliceAsBytes(self.data));
+
+            self.view = try sa.StridedArrayView(T, num_dims).ofSlicePacked(self.data, self.shape[0..num_dims].*);
             return self;
         }
 
@@ -96,8 +103,9 @@ pub const NumpyHeader = struct {
     pub fn read(reader: anytype, allocator: mem.Allocator) anyerror!NumpyHeader {
         var magic: [6]u8 = undefined;
         try reader.readNoEof(magic[0..]);
-        if (!mem.eql(u8, &magic, NPY_MAGIC))
-            return InvalidHeader.NoMagic;
+        if (!mem.eql(u8, &magic, NPY_MAGIC)) {
+            return NpyError.InvalidMagic;
+        }
 
         var header: NumpyHeader = undefined;
 
@@ -118,6 +126,10 @@ pub const NumpyHeader = struct {
         header.fortran_order = headerMap.get("fortran_order").?.boolean;
         header.shape = headerMap.get("shape").?.tuple;
 
+        if (header.fortran_order) {
+            return NpyError.UnsupportedFortranOrder;
+        }
+
         return header;
     }
 };
@@ -134,32 +146,65 @@ test "read header successfully" {
     try testing.expectEqual(false, header.fortran_order);
 }
 
-fn test_arange(comptime T: type, filename: []const u8) anyerror!void {
+fn test_arange(comptime T: type, filename: []const u8) anyerror!Tensor(T, 1) {
     var file = try std.fs.cwd().openFile(filename, .{});
     defer file.close();
     var reader = file.reader();
 
     const allocator = std.testing.allocator;
-    var tensor = try Tensor(T).readNpy(reader, allocator);
-    defer tensor.deinit();
+    var tensor = try Tensor(T, 1).readNpy(reader, allocator);
 
     for (tensor.data) |elem, i| {
         const testVal = @intToFloat(T, i + 1);
         try testing.expectEqual(testVal, elem);
     }
+    return tensor;
+}
+
+fn test_2d_iter(comptime T: type, filename: []const u8) anyerror!void {
+    var file = try std.fs.cwd().openFile(filename, .{});
+    defer file.close();
+    var reader = file.reader();
+
+    const allocator = std.testing.allocator;
+    var tensor = try Tensor(T, 2).readNpy(reader, allocator);
+    defer tensor.deinit();
+
+    try testing.expectEqual(@as(T, 0), tensor.view.get(.{ 0, 0 }));
+    try testing.expectEqual(@as(T, 101), tensor.view.get(.{ 1, 1 }));
+    try testing.expectEqual(@as(T, 202), tensor.view.get(.{ 2, 2 }));
+    try testing.expectEqual(@as(T, 303), tensor.view.get(.{ 3, 3 }));
+    try testing.expectEqual(@as(T, 404), tensor.view.get(.{ 4, 4 }));
+
+    // Iterate over 6th row: 500..599
+    var iter = tensor.view.slice(.{ 5, 0 }, .{ 0, 100 }).iterate();
+    var i: usize = 500;
+    while (iter.next()) |val| : (i += 1) {
+        try testing.expectEqual(@intToFloat(T, i), val);
+    }
 }
 
 test "read simple 1-d npy file" {
-    try test_arange(f64, "test/simple_f64.npy");
-    try test_arange(f32, "test/simple_f32.npy");
-    try test_arange(f32, "test/bigger_f32.npy");
+    var simple_f64: Tensor(f64, 1) = try test_arange(f64, "test/simple_f64.npy");
+    defer simple_f64.deinit();
+    try testing.expectEqual(@as(u32, 99), simple_f64.shape[0]);
+
+    var simple_f32: Tensor(f32, 1) = try test_arange(f32, "test/simple_f32.npy");
+    defer simple_f32.deinit();
+    try testing.expectEqual(@as(u32, 99), simple_f32.shape[0]);
+
+    var bigger_f32: Tensor(f32, 1) = try test_arange(f32, "test/bigger_f32.npy");
+    defer bigger_f32.deinit();
+    try testing.expectEqual(@as(u32, 999), bigger_f32.shape[0]);
 }
 
 test "read simple 2-d npy file" {
-    try test_arange(f32, "test/simple_2d_f32.npy");
+    try test_2d_iter(f32, "test/simple_2d_f32.npy");
 }
 
 test "read wrongly typed simple 1-d npy file" {
-    try testing.expectError(NpyError.NonMatchingType, test_arange(f64, "test/simple_f32.npy"));
-    try testing.expectError(NpyError.NonMatchingType, test_arange(f32, "test/simple_f64.npy"));
+    var err = test_arange(f64, "test/simple_f32.npy");
+    var err2 = test_arange(f64, "test/simple_f32.npy");
+    try testing.expectError(NpyError.NonMatchingType, err);
+    try testing.expectError(NpyError.NonMatchingType, err2);
 }

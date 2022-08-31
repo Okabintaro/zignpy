@@ -8,7 +8,7 @@ ZigNpy
 TODO:
 ----
 
-- [ ] Proper N-D Support 
+- [X] Proper N-D Support 
   - Use [zig-strided-arrays](https://github.com/dweiller/zig-strided-arrays)
 - [ ] Support more datatypes
 - [ ] Npz support

@@ -1,5 +1,13 @@
 const std = @import("std");
 
+const pkgs = struct {
+    const strided_array = std.build.Pkg{
+        .name = "zig-strided-array",
+        .source = .{ .path = "./lib/zig-strided-arrays/src/strided_array.zig" },
+        .dependencies = &[_]std.build.Pkg{},
+    };
+};
+
 pub fn build(b: *std.build.Builder) void {
     // Standard release options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
@@ -7,12 +15,13 @@ pub fn build(b: *std.build.Builder) void {
     const mode = b.standardReleaseOptions();
 
     const lib = b.addStaticLibrary("zignpy", "src/main.zig");
-    lib.use_stage1 = false;
+    lib.addPackage(pkgs.strided_array);
     lib.setBuildMode(mode);
     lib.install();
 
     const main_tests = b.addTest("src/main.zig");
     main_tests.setBuildMode(mode);
+    main_tests.addPackage(pkgs.strided_array);
     const parse_tests = b.addTest("src/dictparse.zig");
     parse_tests.setBuildMode(mode);
 
