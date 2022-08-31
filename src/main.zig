@@ -35,8 +35,12 @@ pub fn Tensor(comptime T: type) type {
             }
             var self = Self{};
             self.allocator = allocator;
-            const len = header.shape[0]; // TODO: Sum this up
-            self.data = try allocator.alloc(T, len);
+            var n_elem = self.shape[0];
+            var i: usize = 1;
+            while (self.shape[i] != 0) : (i += 1) {
+                n_elem *= self.shape[i];
+            }
+            self.data = try allocator.alloc(T, n_elem);
             try reader.readNoEof(mem.sliceAsBytes(self.data));
             return self;
         }
@@ -149,6 +153,10 @@ test "read simple 1-d npy file" {
     try test_arange(f64, "test/simple_f64.npy");
     try test_arange(f32, "test/simple_f32.npy");
     try test_arange(f32, "test/bigger_f32.npy");
+}
+
+test "read simple 2-d npy file" {
+    try test_arange(f32, "test/simple_2d_f32.npy");
 }
 
 test "read wrongly typed simple 1-d npy file" {

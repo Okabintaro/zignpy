@@ -140,6 +140,7 @@ pub const Parser = struct {
                             p.start = i;
                             p.state = .TupleNum;
                         },
+                        ' ' => {}, // Ignore whitespace
                         ')' => {
                             try map.put(p.key.?, p.tuple);
                             p.tuple.tuple = .{0} ** p.tuple.tuple.len;
@@ -385,6 +386,20 @@ test "single tuple" {
     {
         const val = result.get("shape").?;
         const expected = Parser.Value{ .tuple = [8:0]u32{ 42, 69, 777, 0, 0, 0, 0, 0 } };
+        try testing.expectEqual(expected, val);
+    }
+}
+
+test "tuple with space" {
+    const in = "{ 'shape': (10, 100), }";
+    const alloc = std.testing.allocator;
+    var parser = Parser.init();
+    var result = try parser.parseDict(in[0..], alloc);
+    defer result.deinit();
+    try testing.expectEqual(@intCast(u32, 1), result.count());
+    {
+        const val = result.get("shape").?;
+        const expected = Parser.Value{ .tuple = [8:0]u32{ 10, 100, 0, 0, 0, 0, 0, 0 } };
         try testing.expectEqual(expected, val);
     }
 }
